@@ -1,0 +1,12 @@
+<#import "../layout/defaultLayout.ftl.html" as layout> 
+<@layout.mainLayout "Test cluster">    
+
+<h1>${i18n("hello.world")}</h1>
+<p>${i18n("hello.world.json")}</p>
+<p><a href="/health">Check cluster state consistency</a></p>
+<!-- 
+<p><a href="/hello_world.json">Hello World Json</a></p>
+-->
+
+
+</@layout.mainLayout>
