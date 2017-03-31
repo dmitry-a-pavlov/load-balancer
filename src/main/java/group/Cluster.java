@@ -29,6 +29,7 @@ import org.jgroups.blocks.RequestOptions;
 import org.jgroups.blocks.ResponseMode;
 import org.jgroups.blocks.RpcDispatcher;
 import org.jgroups.stack.IpAddress;
+import org.jgroups.util.RspList;
 import org.jgroups.util.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +53,8 @@ public class Cluster extends ReceiverAdapter {
 	private final List<Address> members = new ArrayList<>();
 	private boolean leader = false;
 	private Address my_addr = null;
+	
+	private final Statistics stat = new Statistics(); 
 
 	/**
 	 * Shared state.
@@ -158,6 +161,7 @@ public class Cluster extends ReceiverAdapter {
 			return;
 		}
 		synchronized (theLoads) {
+			stat.calculated++;
 			if(!forcibly && releaseCounter > 0) {
 				//Wait for a follower to release its buckets  
 				logger.debug("Wait acknowledgment for RELESE request");
@@ -217,6 +221,7 @@ public class Cluster extends ReceiverAdapter {
 				&& releaseCounter > 0) { // some release request was not committed timeout 
 				calculateClusterLoad(true);
 				logger.debug("Load recalculation by timeout");
+				stat.calculatedByTimeout++;
 			}
 		  }
 
@@ -271,6 +276,7 @@ public class Cluster extends ReceiverAdapter {
 				}
 				//recalculate load for the node
 				synchronized (theLoads) {
+					stat.refused++;
 					byte[] newLoad = newLoads.calcNewLoad(load, msg.getSrc(), members);
 					if(newLoad == null) {
 						this.newLoads.removeLoad(msg.getSrc());
@@ -367,6 +373,7 @@ public class Cluster extends ReceiverAdapter {
 	 * @param added - buckets to be taken
 	 */
 	private void takeLoad(byte[] oldLoad, byte[] newLoad) {
+		stat.taken++;
 		if(config.takeLoad != null) {
 			config.takeLoad.changeLoad(oldLoad, newLoad);
 		}
@@ -387,6 +394,7 @@ public class Cluster extends ReceiverAdapter {
 	 * @return return array with busy buckets !ONLY!, can return 'null' what means no busy buckets found.    
 	 */
 	private byte[] releaseLoad(byte[] oldLoad, byte[] newLoad) {
+		stat.released++;
 		if(config.releaseLoad == null) {
 			return null;
 		}
@@ -579,6 +587,38 @@ public class Cluster extends ReceiverAdapter {
     	return buckets;
     }
     
+    public Statistics getStatistics() {
+    	return stat;
+    }
+    
+    /**
+     * Take cluster statistics
+     * @param timeout - time to wait for response
+     * @return
+     */
+    public Statistics getClusterStatistics(long timeout) {
+    	RspList<Statistics> list = null;
+    	try {
+			list = disp.<Statistics>callRemoteMethods(members, "getStatistics", null, null, new RequestOptions(ResponseMode.GET_ALL, timeout));
+		} catch (Exception e) {
+			logger.error("Query to cluster statistics fail", e);
+			return null;
+		}
+    	Statistics res = new Statistics();
+    	for(Address adr: members) {
+    		Statistics st = list.getValue(adr);
+    		if(st == null) {
+    			logger.error(adr + " didn't return statistics");
+    			return null;
+    		}
+    		res.add(st);
+    	}
+    	return res;
+    }
+
+    
+
+    
     public ClusterHealth checkClusterHealth(long timeout) {
     	ClusterHealth info = new ClusterHealth();
     	List<String> unreachableNodes = new ArrayList<String>();
@@ -617,20 +657,20 @@ public class Cluster extends ReceiverAdapter {
     	for(int i = 0; i < config.totalBuckets; i++) {
 			if(counter[0] == 0) {
 				info.state = State.MISSED_BUCKETS;
+				info.currentStateNode = my_addr + "$" + getState();
+				return info;
 			}
 		}
 
-    	if(info.state != State.OK) {
-    		return info;
-    	}
-    	
     	//Check load balancer distributed state 
     	String state = getState();
     	for(Address adr: members) {
     		try {
     			String str = disp.<String>callRemoteMethod(adr, "getState", null, null, new RequestOptions(ResponseMode.GET_FIRST, timeout));
-    			if(state.equals(str)) {
-    				info.state = State.DIFFERENT_STATE;
+    			if(!state.equals(str)) {
+    				info.state = State.INCORRECT_STATE;
+    				info.currentStateNode = my_addr + "$" + state; 
+    				info.incorrectStateNode = adr + "-" + str;
     				break;
     			}
     		} catch (Exception e) {
@@ -642,7 +682,6 @@ public class Cluster extends ReceiverAdapter {
     		info.unreachableNodes = unreachableNodes;
     		return info;
     	}
-
 
 		return info;
 	}

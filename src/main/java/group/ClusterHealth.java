@@ -4,8 +4,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.jgroups.stack.IpAddress;
-
 /**
  * Provides information about cluster state
  * 
@@ -22,20 +20,27 @@ public class ClusterHealth {
 	 * NO_RESPONCE:		inconsistent - there are nodes which doesn't response
 	 * 
 	 */
-	enum State {OK, MISSED_BUCKETS, INTERSECTED, NO_RESPONCE, DIFFERENT_STATE }
+	enum State {OK, MISSED_BUCKETS, INTERSECTED, NO_RESPONCE, INCORRECT_STATE }
 	
 	public State state = State.OK;
 	
 	public String bucketsCounter = "";
 	
 	public List<String> unreachableNodes = new ArrayList<>();
+	
+	/** Address and State of the current node*/
+	public String currentStateNode = "";
+	/** Address and State of an inconsistent node*/
+	public String incorrectStateNode = "";
 
 	@Override
 	public String toString() {
 		StringBuilder sb = new StringBuilder();
-		sb.append("state:\t\t\t").append(state).append('\n');
-		sb.append("bucketsCounter:\t\t\t").append(bucketsCounter).append('\n');
-		sb.append("unreachableNodes:\t\t\t").append(Arrays.toString(unreachableNodes.toArray())).append('\n');
+		sb.append("state:\t\t").append(state).append('\n');
+		sb.append("bucketsCounter:     ").append(bucketsCounter).append('\n');
+		sb.append("unreachableNodes:   ").append(Arrays.toString(unreachableNodes.toArray())).append('\n');
+		sb.append("currentStateNode:   ").append(currentStateNode).append('\n');
+		sb.append("incorrectStateNode: ").append(incorrectStateNode).append('\n');
 		return sb.toString();
 	}
 
