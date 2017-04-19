@@ -18,6 +18,7 @@ package controllers;
 
 import ninja.Result;
 import ninja.Results;
+import ninja.params.PathParam;
 import system.SysCluster;
 
 import com.google.inject.Inject;
@@ -56,9 +57,10 @@ public class ApplicationController {
         
     }
     
-    public Result checkClusterHealth() {
-        
-        return Results.json().render(cluster.checkClusterHealth());
+    public Result checkClusterHealth( @PathParam("type") String type ) {
+    	int loadType =  type == null || type.length() == 0? -1: Integer.parseInt(type);
+
+    	return Results.json().render(cluster.checkClusterHealth(loadType));
 
     }
 

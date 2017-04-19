@@ -171,9 +171,19 @@ public class ClusterUtils {
 	}
 	
 	public static int getBitsSize(int originalSize) {
-		return (originalSize-1)/8+1;
+		return (originalSize-1)/8 + 1;
 	}
 	
+	private static int getIntsSize(int bytesSize) {
+		return (bytesSize - 1)/4 + 1;
+	}
+
+	
+	/**
+	 * I turn byte array of 0s or 1s into bits array
+	 * @param load - array of 0s OR 1s 
+	 * @return - compressed array
+	 */
 	public static byte[] toBits(byte[] load) {
 		byte[] result = new byte[getBitsSize(load.length)];
 		for (int i = 0; i < load.length; i++) {
@@ -184,6 +194,11 @@ public class ClusterUtils {
 		return result;
 	}
 
+	/**
+	 * I turn bits array into byte array of 0s or 1s 
+	 * @param bits - array where every bit have to be turned into byte  
+	 * @return - uncompressed array of 0s or 1s
+	 */
 	public static byte[] fromBits(byte[] bits, int size) {
 		byte[] result = new byte[size];
 		for (int i = 0; i < size; i++) {
@@ -193,5 +208,54 @@ public class ClusterUtils {
 		}		
 		return result;
 	}
+	
+	
+	public static byte[] intToByte(int[] array) {
+		if(array == null) {
+			return null;
+		}
+		byte[] result = new byte[array.length * 4];
+		for (int i = 0; i < array.length; i++) {
+			write32bit(array[i], result, i*4);
+		}
+		return result;
+	}
+	
+	public static int[] byteToInt(byte[] array) {
+		if(array == null) {
+			return null;
+		}
+		if(array.length == 0) {
+			return new int[] {};
+		}
+		int[] result = new int[getIntsSize(array.length)];
+		for (int i = 0; i < result.length; i++) {
+			result[i] = read32bit(array, i*4);
+		}
+		return result;
+	}
+
+	
+    /**
+     * Writes a 32bit integer at the index.
+     */
+    public static void write32bit(int value, byte[] code, int index) {
+        code[index]     = (byte)((value >>> 24) & 0xff);
+        code[index + 1] = (byte)((value >>> 16) & 0xff);
+        code[index + 2] = (byte)((value >>>  8) & 0xff);
+        code[index + 3] = (byte)((value >>>  0) & 0xff);
+    }
+
+
+    /**
+     * Reads a 32bit integer at the index.
+     */
+    public static int read32bit(byte[] code, int index) {
+        return ( code[index]             << 24) | 
+        	   ((code[index + 1] & 0xff) << 16) | 
+        	   ((code[index + 2] & 0xff) << 8)  | 
+        	   ((code[index + 3] & 0xff) << 0);
+    }
+
 
 }

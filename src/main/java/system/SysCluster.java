@@ -34,7 +34,10 @@ public class SysCluster {
 		int TOTAL_BUCKETS = properties.getIntegerWithDefault("cluster.total_buckets", 20);
 		int TOTAL_NODES = properties.getIntegerWithDefault("cluster.total_nodes", 1);
 		
-		cluster = Cluster.builder().totalBuckets(TOTAL_BUCKETS).totalNodes(TOTAL_NODES).build();
+		cluster = Cluster.builder()
+				.totalBuckets(TOTAL_BUCKETS)
+				.totalNodes(TOTAL_NODES).loadTypes(new int[]{-1, 155})
+				.build();
 	}
 
 	@Start(order = 1)
@@ -52,8 +55,8 @@ public class SysCluster {
 		return cluster.toString();
 	}
 
-	public ClusterHealth checkClusterHealth() {
-		return cluster.checkClusterHealth(5000);
+	public ClusterHealth checkClusterHealth(Integer type) {
+		return cluster.checkClusterHealth(type, 5000);
 	}
 
 }

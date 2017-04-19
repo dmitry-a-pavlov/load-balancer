@@ -5,6 +5,7 @@ import group.ClusterHealth.State;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 import org.junit.FixMethodOrder;
@@ -13,7 +14,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
-import org.openqa.selenium.support.ui.Sleeper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,9 +29,13 @@ public class AsynchronousStartTest {
 	public static Collection<Object[]> data() {
 		return Arrays.asList(
 				new Object[][] {
-						{20, 1},
-						{35, 3}, 
-						{20, 8},
+						{20, 1, -1},
+						{35, 3, -1}, 
+						{20, 8, 1},
+						{20, 8, -1},
+						{20, 8, 8},
+						//{60, 30, 1},
+						//{120, 60, -1},
 				});
 	}
 
@@ -39,15 +43,17 @@ public class AsynchronousStartTest {
 	private static final int TIME_OUT = 10000;
 	private int totalBuckets;
 	private int totalNodes;
+	private int nodesToWait;
 	
 	private CountDownLatch startGate = null;
 	private CountDownLatch endGate = null;
 	private CountDownLatch readyGate = null;
 
     
-	public AsynchronousStartTest(int numBuckets, int numNodes) {
+	public AsynchronousStartTest(int numBuckets, int numNodes, int nodesToWait) {
 		this.totalBuckets = numBuckets; 
 		this.totalNodes = numNodes;
+		this.nodesToWait = nodesToWait;
 	}
     
     
@@ -68,25 +74,26 @@ public class AsynchronousStartTest {
 		this.startGate.countDown();
 		this.endGate.await();
 		long elapsedStartTime = System.nanoTime() - clusterStart;
-		Thread.sleep(3000);
-		
-		ClusterHealth health = threads[0].cluster.checkClusterHealth(TIME_OUT);
-		logger.info("Cluster health:\n" + health);
-		assertTrue("Inconsistent state:\n" + health, health.state == State.OK);
-		String state = threads[0].cluster.getState();
+		Thread.sleep(10000);
+		Set<Integer> loadTypes = threads[0].cluster.getLoadTypes();
 		Statistics statistic = threads[0].cluster.getClusterStatistics(TIME_OUT);
-		
+		for(Integer type: loadTypes) {
+			ClusterHealth health = threads[0].cluster.checkClusterHealth(type, TIME_OUT);
+			logger.info("Cluster health:\n" + health);
+			logger.info("Cluster state ({}):\n{}", type, threads[0].cluster.getState(type));
+			assertTrue("Inconsistent state:\n" + health, health.state == State.OK);
+		}
+		logger.info("------------------------------------------------------------");
 		for(int i = totalNodes - 1; i >= 0; i--) {
 			threads[i].cluster.stop();
 		}
-		logger.info(state);
 		
 		long time = 0;
 		for(int i = totalNodes - 1; i >= 0; i--) {
 			time += threads[i].elapsed;
 		}
 		time = time/totalNodes;
-		logger.info("Ave node start time:\t" + time/1000000000);
+		logger.info("Avereage node start time:\t" + time/1000000000);
 		logger.info("Cluster start time:\t" + elapsedStartTime/1000000000);
 		logger.info("Cluster statistics:\n" + statistic);
 		
@@ -102,7 +109,12 @@ public class AsynchronousStartTest {
 
 		NodeThread(int numBuckets, int numNodes, int no) {
 			setName("NodeThread" + no);
-			cluster = Cluster.builder().totalBuckets(totalBuckets).totalNodes(totalNodes).build();
+			cluster = Cluster.builder()
+					.totalBuckets(totalBuckets)
+					.totalNodes(totalNodes)
+					.nodesToWait(nodesToWait)
+					.loadTypes(new int[] {-1, 155})
+					.build();
 		}
 
 		@Override

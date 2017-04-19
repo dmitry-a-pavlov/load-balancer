@@ -3,7 +3,10 @@ package group;
 import static group.ClusterUtils.isEmpty;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -18,7 +21,7 @@ import org.slf4j.LoggerFactory;
  * @author Dmitriy Pavlov
  */
 class ClusterLoad implements Cloneable {
-	
+
 	protected static final Logger logger = LoggerFactory.getLogger(ClusterLoad.class);
 
 	/** 
@@ -27,9 +30,11 @@ class ClusterLoad implements Cloneable {
 	 */
 	private ConcurrentMap<String, String> load = new ConcurrentHashMap<>();
 	private int totalBaketNum = 0;
+	private final int loadType;
 
-	public ClusterLoad(int totalBakets) {
+	public ClusterLoad(int totalBakets, int loadType) {
 	   this.totalBaketNum = totalBakets;
+	   this.loadType = loadType;
 	}
 
 	/**
@@ -47,6 +52,12 @@ class ClusterLoad implements Cloneable {
 		}
 		return result;
 	}
+	
+	public boolean hasLoad(Address address) {
+		String str = load.get(address.toString());
+		return !isEmpty(str); 
+	}
+
 
 	public void clear() {
 		load.clear();
@@ -60,15 +71,34 @@ class ClusterLoad implements Cloneable {
 		load.put(address.toString(), ClusterUtils.toString(buckets));
 	}
 	
+	public void initIfAbsent(Address owner) {
+		load.putIfAbsent(owner.toString(), "");
+	}
+
+	
 	public boolean contains(Address address) {
 		return load.containsKey(address.toString());
+	}
+	
+	/**
+	 * I find all the nodes which share the given load type
+	 * @param loadType - load type
+	 * @return members list for the loadType
+	 */
+	public List<Address> getMembers(int loadType, List<Address> members) {
+		List<Address> result = new LinkedList<Address>();
+		for (Address mbr: members) {
+			if(contains(mbr)) {
+				result.add(mbr);
+			}
+		}
+		return result;
 	}
 
 	@Override
 	public String toString() {
 		StringBuilder sb = new StringBuilder(100);
 		for (String address : load.keySet()) {
-			sb.append("\t\t\t");
 			sb.append(address).append("=");
 			sb.append(load.get(address));
 			sb.append(";\n");
@@ -114,30 +144,27 @@ class ClusterLoad implements Cloneable {
 			current = getLoad(currentAddr);
 		}
 		byte[] usedList = new byte[totalBaketNum];
+		Map<Integer, Integer> counter = new HashMap<>();  //extra buckets counter
 		int usedBucketNum = ClusterUtils.merge(usedList, current);
 		final int myBucketNum = usedBucketNum; // current number of buckets
 		int nodes = 1;
-		int myIndex = 0; // number of current PE in accorders with order by
-		int i = 0;
 		for (Address adr : members) {
 			if (adr.equals(currentAddr)) {// skip ourself
-				myIndex = i;
 				continue;
 			}
-			i++;
 			nodes++;
-			usedBucketNum += ClusterUtils.merge(usedList, getLoad(adr));
+			byte[] adrBuckets = getLoad(adr);
+			incCounter(counter, ClusterUtils.count(adrBuckets));
+			usedBucketNum += ClusterUtils.merge(usedList, adrBuckets);
 		}
 
 		int targetBucketNum = totalBaketNum / nodes;
-		// node's number which have to take extra bucket
-		int remainder = totalBaketNum % nodes; 
-		if (myIndex < remainder) {
-			targetBucketNum++;
+		int remainder = totalBaketNum % nodes; 		// node's number which have to take extra bucket
+		if(getCounter(counter, targetBucketNum + 1) < remainder) {			
+			targetBucketNum++; // take extra bucket if possible
 		}
 		if (targetBucketNum == myBucketNum) {
-			// current and new allocation haven't changed
-			return null;
+			return null; // current and new allocation haven't changed
 		}
 		byte[] newLoad = new byte[totalBaketNum];
 		System.arraycopy(current, 0, newLoad, 0, newLoad.length);
@@ -147,10 +174,9 @@ class ClusterLoad implements Cloneable {
 			if (usedBucketNum == totalBaketNum) {
 				return null; // all buckets are taken
 			}
-
-			final int delta = targetBucketNum - myBucketNum;
-			final int max = delta > totalBaketNum ? totalBaketNum : delta;
-			final int cnt = ClusterUtils.allocate(newLoad, usedList, max);
+			int delta = targetBucketNum - myBucketNum;
+			delta = delta > totalBaketNum ? totalBaketNum : delta; //it is possible when nodes == 1
+			final int cnt = ClusterUtils.allocate(newLoad, usedList, delta);
 			return cnt == 0 ? null : newLoad;
 		}
 		// release buckets
@@ -158,12 +184,22 @@ class ClusterLoad implements Cloneable {
 		final int cnt = ClusterUtils.release(newLoad, delta);
 		return cnt == 0 ? null : newLoad;
 	}
+	
+	private Integer getCounter(Map<Integer, Integer> counter, int bucketsNum) {
+		return counter.get(bucketsNum) == null ? 0 : counter.get(bucketsNum);
+	}
+
+	private void incCounter(Map<Integer, Integer> counter, int bucketsNum) {
+		Integer x = counter.get(bucketsNum);
+		x = (x == null) ? 1 : x + 1;
+		counter.put(bucketsNum, x);
+	}
 
 	/**
 	 * Delete load of nodes than do not belong the cluster  
 	 * @param members - membership list
 	 */
-	synchronized public void cleanLoad(List<Address> members) {
+	public void cleanLoad(List<Address> members) {
 		ArrayList<String> toDelete = new ArrayList<>();
 		main: for (String address: load.keySet()) {
 			for (Address addr : members) {
@@ -175,7 +211,7 @@ class ClusterLoad implements Cloneable {
 		}
 		for (String address: toDelete) {
 			load.remove(address);
-			logger.info("Load is removed: {}", address);
+			logger.info("Load is removed ({}): {}", loadType, address);
 		}
 	}
 	
