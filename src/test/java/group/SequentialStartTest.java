@@ -51,6 +51,7 @@ public class SequentialStartTest {
 		Cluster[] clusters = new Cluster[totalNodes];  
 		for(int i = 0; i < totalNodes; i++) {
 			clusters[i] = Cluster.builder()
+					.clusterName("TestClusterSStart")
 					.totalBuckets(totalBuckets)
 					.totalNodes(totalNodes)
 					.loadTypes(new int[] {-1, 155})

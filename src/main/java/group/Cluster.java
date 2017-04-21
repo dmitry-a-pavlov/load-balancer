@@ -143,7 +143,7 @@ public class Cluster extends ReceiverAdapter {
 			channel.setReceiver(this);
 			disp = new RpcDispatcher(channel, this, this, this);
 			
-			channel.connect("AVMCluster");
+			channel.connect(config.clusterName);
 			my_addr = channel.getAddress();
 			channel.getState(null, 10000);
 		} catch (Exception e) {
@@ -758,13 +758,16 @@ public class Cluster extends ReceiverAdapter {
     	int recalLoadTimeout = 5000; //milliseconds;
     	
     	/** Callback for release load */
-    	private ChangeLoad releaseLoad; 
+    	ChangeLoad releaseLoad; 
     	
     	/**Callback for take load*/
-    	private ChangeLoad takeLoad;
+    	ChangeLoad takeLoad;
     	
     	/** this lock should synchronize resources before to be released */
-    	private Object releaseLock = new Object(); 
+    	Object releaseLock = new Object();
+    	
+    	/** Name of the cluster */
+    	String clusterName;
 
     	public Builder releaseLock(Object lock) {
     		releaseLock = lock;
@@ -819,7 +822,15 @@ public class Cluster extends ReceiverAdapter {
     		return this;
     	}
     	
+        public Builder clusterName(String name) {
+            clusterName = name;
+            return this;
+        }
+    	
     	public Cluster build() {
+    		if(ClusterUtils.isEmpty(clusterName)) {
+    			throw new ClusterException("Cluster name must be specified");
+    		}
     		return new Cluster(this); 
     	}
     	
@@ -986,6 +997,14 @@ public class Cluster extends ReceiverAdapter {
 
 	public Set<Integer> getLoadTypes() {
 		return theLoads.keySet();
+	}
+
+	public String getClusterName() {
+		return channel.getClusterName();
+	}
+
+	public Builder getConfig() {
+		return config;
 	}
 
 }

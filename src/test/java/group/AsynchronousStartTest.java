@@ -110,6 +110,7 @@ public class AsynchronousStartTest {
 		NodeThread(int no) {
 			setName("NodeThread" + no);
 			cluster = Cluster.builder()
+					.clusterName("TestClusterAStart")
 					.totalBuckets(AsynchronousStartTest.this.totalBuckets)
 					.totalNodes(AsynchronousStartTest.this.totalNodes)
 					.nodesToWait(AsynchronousStartTest.this.nodesToWait)

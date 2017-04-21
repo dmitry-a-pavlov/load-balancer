@@ -35,6 +35,7 @@ public class SysCluster {
 		int TOTAL_NODES = properties.getIntegerWithDefault("cluster.total_nodes", 1);
 		
 		cluster = Cluster.builder()
+				.clusterName("AVMCluster")
 				.totalBuckets(TOTAL_BUCKETS)
 				.totalNodes(TOTAL_NODES).loadTypes(new int[]{-1, 155})
 				.build();
