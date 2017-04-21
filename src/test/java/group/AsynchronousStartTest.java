@@ -66,7 +66,7 @@ public class AsynchronousStartTest {
 		
 		NodeThread[] threads = new NodeThread[totalNodes];
 		for(int i = 0; i < totalNodes; i++) {
-			threads[i] = new NodeThread(totalBuckets, totalNodes, i + 1);
+			threads[i] = new NodeThread(i + 1);
 			threads[i].start();
 		}
 		this.readyGate.await(); //wait for all threads
@@ -107,12 +107,12 @@ public class AsynchronousStartTest {
 		Cluster cluster;
 		long elapsed = 0;
 
-		NodeThread(int numBuckets, int numNodes, int no) {
+		NodeThread(int no) {
 			setName("NodeThread" + no);
 			cluster = Cluster.builder()
-					.totalBuckets(totalBuckets)
-					.totalNodes(totalNodes)
-					.nodesToWait(nodesToWait)
+					.totalBuckets(AsynchronousStartTest.this.totalBuckets)
+					.totalNodes(AsynchronousStartTest.this.totalNodes)
+					.nodesToWait(AsynchronousStartTest.this.nodesToWait)
 					.loadTypes(new int[] {-1, 155})
 					.build();
 		}

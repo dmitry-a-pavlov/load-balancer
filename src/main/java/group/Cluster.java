@@ -26,7 +26,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiFunction;
 
 import org.jgroups.Address;
 import org.jgroups.JChannel;
@@ -326,8 +325,10 @@ public class Cluster extends ReceiverAdapter {
 					sendCommit(my_addr, loadType, new_load, my_addr, command); //RELEASE and TAKE can be committed 
 					continue;
 				}
-				int counter = (command == RELEASE)? 
-						releaseCounter.computeIfPresent(loadType, INC_COUNTER): releaseCounter.get(loadType);
+				int counter = releaseCounter.get(loadType);
+				if(command == RELEASE) {
+					releaseCounter.put(loadType, ++counter);
+				}
 				if(counter > 0 && command == TAKE) {
 					continue; //it have to wait before buckets will be released   
 				}
@@ -387,10 +388,14 @@ public class Cluster extends ReceiverAdapter {
 			if(logger.isTraceEnabled())
 				logger.debug("\n>-----{}\n>-----{}", msg.toString(), req);
 			switch (req.type) {
-			case COMMIT:// message sent from a leader to followers & leader itself 
+			case COMMIT:// message sent from a leader to followers & leader itself
+				if(leader && msg.getDest() == null) { //the leader has its personal commit, it has to ignore public commit
+					break; //skip public commit (commit to ALL), do not send it again
+				}
 				synchronized (theLoads) {
 					byte[] new_buckets = newBuckets.get(req.loadType);
-					if (my_addr.equals(req.owner) && Arrays.equals(req.load, new_buckets)) { //I am an owner of the load
+					if (my_addr.equals(req.owner) && Arrays.equals(req.load, new_buckets)) //I am an owner of the load
+					{ 
 						switch (req.ackType) {
 						case RELEASE:
 							buckets.put(req.loadType, new_buckets);
@@ -405,23 +410,37 @@ public class Cluster extends ReceiverAdapter {
 						}
 					}
 					initLoadIfAbsent(req.loadType, req.owner);
+					
+					//first - update the common state, 
 					ClusterLoad theLoad = theLoads.get(req.loadType);
-					theLoad.putLoad(req.owner, req.load);  //first - update the common state
-					if(leader							   //only the leader is eligible to calculate load
-						&& (req.ackType == Type.RELEASE)   //got free buckets => can recalculate state!
-						&& !req.owner.equals(my_addr)      //no needs to calculate twice, commit is sent by leader wile recalculation
-						&& (releaseCounter.computeIfPresent(req.loadType, DEC_COUNTER) == 0)) //all response received (protected by theLoads) 
-					{ 
-						calculateClusterLoad(req.loadType, true); 
+					if(!leader) {
+						theLoad.putLoad(req.owner, req.load);
+						break;
 					}
 					
-					//it was commit for leader => leader state was updates 
-					//then it can spread the load to others
-					if(leader && 					    
-					   (msg.getDest() != null)) //skip commit to ALL 
-					{
+					//I am the leader
+					//only the leader is eligible to calculate load and send public commit 
+					
+					ClusterLoad newLoad = newLoads.get(req.loadType);
+					byte[] new_load = newLoad.getLoad(req.owner);
+					// double check for consistency, if it is not recalculated we can update 
+					if(newLoad != null && Arrays.equals(new_load, req.load)) {
+						theLoad.putLoad(req.owner, req.load);
+						
+						if( (req.ackType == Type.RELEASE) &&  //got free buckets => can recalculate state!
+							!req.owner.equals(my_addr))       //no needs to calculate twice, commit is sent by leader while recalculation
+						{
+							int counter = releaseCounter.get(req.loadType);
+							releaseCounter.put(req.loadType, --counter); 	//protected by 'theLoads'
+							if(counter == 0) 								//all response received 
+								calculateClusterLoad(req.loadType, true);
+							
+						}
+					
+						//it was commit for leader => leader state was updated 
+						//then it can spread the load to others
 						sendCommit(null, req.loadType, req.load, req.owner, req.ackType); // message to ALL: to update their state
-					}
+					}						
 				}
 				break;
 			case REFUSE:// message for the leader
@@ -801,25 +820,6 @@ public class Cluster extends ReceiverAdapter {
     	
     }
     
-	private final static BiFunction<Integer, Integer, Integer> INC_COUNTER = new BiFunction<Integer, Integer, Integer>() {
-
-		@Override
-		public Integer apply(Integer key, Integer val) {
-			return val + 1;
-		}
-	};
-	
-	private final static BiFunction<Integer, Integer, Integer> DEC_COUNTER = new BiFunction<Integer, Integer, Integer>() {
-
-		@Override
-		public Integer apply(Integer key, Integer val) {
-			return val - 1;
-		}
-	};
-
-
-
-    
     //~ Cluster state validation --------------------------------------------------------------
     //  the methods are remotely called  
     public String getState(Integer loadType) {
@@ -849,7 +849,8 @@ public class Cluster extends ReceiverAdapter {
     public Statistics getClusterStatistics(long timeout) {
     	RspList<Statistics> list = null;
     	try {
-			list = disp.<Statistics>callRemoteMethods(members, "getStatistics", null, null, new RequestOptions(ResponseMode.GET_ALL, timeout));
+			list = disp.<Statistics>callRemoteMethods(members, "getStatistics", null, null, 
+													  new RequestOptions(ResponseMode.GET_ALL, timeout));
 		} catch (Exception e) {
 			logger.error("Query to cluster statistics fail", e);
 			return null;
@@ -858,15 +859,30 @@ public class Cluster extends ReceiverAdapter {
     	for(Address adr: members) {
     		Statistics st = list.getValue(adr);
     		if(st == null) {
-    			logger.error(adr + " didn't return statistics");
-    			return null;
+    			logger.warn(adr + " didn't return statistics");
+    			continue;
     		}
     		res.add(st);
     	}
     	return res;
     }
 
-    
+    public Statistics getClusterStatistics_first(long timeout) {
+    	Statistics res = new Statistics(config, getLoadTypes().toString());
+    	for(Address adr: members) {
+	    	try {
+	    		Statistics stat = 
+    					disp.<Statistics>callRemoteMethod(adr, "getStatistics", 
+    							null, null, 
+    							new RequestOptions(ResponseMode.GET_FIRST, timeout));
+	    		res.add(stat);
+			} catch (Exception e) {
+				logger.error("Query to cluster statistics fail {}, {}", adr, e.getMessage());
+				return null;
+			}
+    	}
+    	return res;
+    }
 
     
     public ClusterHealth checkClusterHealth(Integer loadType, long timeout) {

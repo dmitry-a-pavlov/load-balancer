@@ -9,13 +9,13 @@ import java.util.Arrays;
 public class Statistics implements Serializable {
 	private static final long serialVersionUID = 5982118797761004551L;
 
+	public final String loadTypes;
 	public volatile int taken = 0;     //number of calls to tale the load 
 	public volatile int released = 0;  //number of calls to release the load
 	public volatile int refused = 0;   //number of calls to refuse to release the load
 	public volatile int calculated = 0;//number of calls to calculate the load
 	public volatile int calculatedByTimeout = 0; //number of calls to recalculate the load by timeout
-	public final Builder config;
-	public final String loadTypes;
+	transient public final Builder config;
 	
 	public Statistics(Builder config, String loadTypes) {
 		this.config = config;
