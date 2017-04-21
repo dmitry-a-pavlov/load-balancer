@@ -896,9 +896,7 @@ public class Cluster extends ReceiverAdapter {
 	    	List<String> unreachableNodes = new ArrayList<String>();
 	    	
 	    	if(members.size() != config.totalNodes) {
-	    		info.state = State.MISSED_NODES;
-	    		info.message = "Started: " + members.size(); 
-	    		return info; 
+	    		info.message = "Expected nodes: " + config.totalNodes + "Started: " + members.size(); 
 	    	}
 	    	
 	    	//Check buckets distribution
