@@ -293,7 +293,7 @@ public class Cluster extends ReceiverAdapter {
 		}
 		synchronized (theLoads) {
 			stat.calculated++;
-			if(!forcibly && releaseCounter.getOrDefault(loadType, 0) > 0) {
+			if(!forcibly && getCounter(loadType, 0) > 0) {
 				//Wait for a follower to release its buckets  
 				logger.debug("Wait acknowledgment for RELESE request");
 				return; 
@@ -339,6 +339,11 @@ public class Cluster extends ReceiverAdapter {
 				scheduleTimeout(loadType);
 			}
 		}
+	}
+
+	private Integer getCounter(int loadType, int defVal) {
+		Integer counter = releaseCounter.get(loadType);
+		return counter != null? counter: defVal;
 	}
 
 	/** 
