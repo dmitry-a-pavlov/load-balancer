@@ -67,10 +67,12 @@ public class Cluster extends ReceiverAdapter {
 	/**
 	 * Shared state {loadType, ClasterLoad}.
 	 * The major problem is to provide consistency of the shared state 
-	 * among all nodes of the cluster. 
+	 * among all nodes of the cluster.
+	 * @protectedBy clusterLock 
 	 */
 	private Map<Integer, ClusterLoad> theLoads = new HashMap<>(); 
 	private Map<Integer, ClusterLoad> newLoads = new HashMap<>(); // pending state
+	private final Object clusterLock = new Object();
 
 	private Map<Integer, byte[]> buckets = new HashMap<>();    // current load
 	private Map<Integer, byte[]> newBuckets = new HashMap<>(); // new unconfirmed load
@@ -78,6 +80,7 @@ public class Cluster extends ReceiverAdapter {
 	// wait for a half node or specified number of nodes to be started 
 	// before calculate load
 	private boolean election = true;
+
 	
 	/**
 	 * counts numbers of request for release buckets
@@ -86,7 +89,7 @@ public class Cluster extends ReceiverAdapter {
 	 * 
 	 * Most important: DO NOT distribute free bucket before it will be released!
 	 * 
-	 * @protectedBy theLoads
+	 * @protectedBy clusterLock
 	 */
 	private ConcurrentHashMap<Integer, Integer> releaseCounter = new ConcurrentHashMap<>();
 	
@@ -95,7 +98,7 @@ public class Cluster extends ReceiverAdapter {
 	private ScheduledExecutorService serviceSheduler;
 	
 	public static interface ChangeLoad {
-		byte[] changeLoad(byte[] oldLoad, byte[] newLoad);
+		byte[] changeLoad(int loadType, byte[] oldLoad, byte[] newLoad);
 	}
 
 	// ~constructors ------------------------------------------------
@@ -146,6 +149,7 @@ public class Cluster extends ReceiverAdapter {
 			channel.connect(config.clusterName);
 			my_addr = channel.getAddress();
 			channel.getState(null, 10000);
+			stat.startClusterTime = System.currentTimeMillis();
 		} catch (Exception e) {
 			stop();
 			throw new ClusterException("Cannot get cluster state");
@@ -165,7 +169,7 @@ public class Cluster extends ReceiverAdapter {
 	 */
 	@Override
 	public void getState(OutputStream output) throws Exception {
-		synchronized (theLoads) {
+		synchronized (clusterLock) {
 			StringBuilder clusterLoad = new StringBuilder(); 
 			for(int loadType: theLoads.keySet()) {
 				ClusterLoad theLoad = theLoads.get(loadType);
@@ -191,7 +195,7 @@ public class Cluster extends ReceiverAdapter {
 			return;
 		}
 
-		synchronized (theLoads) {
+		synchronized (clusterLock) {
 			theLoads.clear();
 			String clusterLoad = (String) new_state;
 			String[] typeLoads = clusterLoad.split("\n");
@@ -219,7 +223,7 @@ public class Cluster extends ReceiverAdapter {
 	
 	@Override
 	public void viewAccepted(View view) {
-		synchronized (theLoads) {
+		synchronized (clusterLock) {
 			List<Address> joined = new LinkedList<Address>();
 			List<Address> left = new LinkedList<Address>();
 			setInternalState(view.getMembers(), joined, left);
@@ -287,11 +291,11 @@ public class Cluster extends ReceiverAdapter {
 	 * The main method to calculate the cluster load
 	 * The only leader is eligible to calculate the cluster load!
 	 */
-	private void calculateClusterLoad(int loadType, boolean forcibly) {
+	/*package*/ void calculateClusterLoad(int loadType, boolean forcibly) {
 		if (!leader) {
 			return;
 		}
-		synchronized (theLoads) {
+		synchronized (clusterLock) {
 			stat.calculated++;
 			if(!forcibly && getCounter(loadType, 0) > 0) {
 				//Wait for a follower to release its buckets  
@@ -397,18 +401,22 @@ public class Cluster extends ReceiverAdapter {
 				if(leader && msg.getDest() == null) { //the leader has its personal commit, it has to ignore public commit
 					break; //skip public commit (commit to ALL), do not send it again
 				}
-				synchronized (theLoads) {
+				synchronized (clusterLock) {
 					byte[] new_buckets = newBuckets.get(req.loadType);
 					if (my_addr.equals(req.owner) && Arrays.equals(req.load, new_buckets)) //I am an owner of the load
 					{ 
 						switch (req.ackType) {
 						case RELEASE:
 							buckets.put(req.loadType, new_buckets);
+							newBuckets.remove(req.loadType); 
+							stat.lastBucketUpdateTime = System.currentTimeMillis();
 							break;
 						case TAKE:
 							byte[] my_buckets = buckets.get(req.loadType);
 							takeLoad(req.loadType, my_buckets, new_buckets); //take real load
 							buckets.put(req.loadType, new_buckets);
+							newBuckets.remove(req.loadType);
+							stat.lastBucketUpdateTime = System.currentTimeMillis();
 							break;
 						default:
 							throw new ClusterException("Illigal command to commit: " + req.ackType);
@@ -449,7 +457,7 @@ public class Cluster extends ReceiverAdapter {
 				}
 				break;
 			case REFUSE:// message for the leader
-				synchronized (theLoads) {
+				synchronized (clusterLock) {
 					//recalculate load for the given type
 					ClusterLoad theLoad = theLoads.get(req.loadType);
 					ClusterLoad newLoad = newLoads.get(req.loadType);
@@ -475,7 +483,7 @@ public class Cluster extends ReceiverAdapter {
 				}
 				break;
 			case TAKE: // for follower from a leader
-				synchronized (theLoads) {
+				synchronized (clusterLock) {
 					byte[] my_buckets = buckets.get(req.loadType);
 					byte[] added = ClusterUtils.getAddedBuckets(my_buckets, req.load);
 					logger.info("Load to be taken for ({}): [{}]", req.loadType, ClusterUtils.toString(added));
@@ -488,7 +496,7 @@ public class Cluster extends ReceiverAdapter {
 				}
 				break;
 			case RELEASE:// message for follower
-				synchronized (theLoads) { //to support 'refuse' process we need to try release buckets here (not in 'commit' stage) 
+				synchronized (clusterLock) { //to support 'refuse' process we need to try release buckets here (not in 'commit' stage) 
 					byte[] my_buckets = buckets.get(req.loadType);
 					byte[] left = ClusterUtils.getLeftBuckets(my_buckets, req.load);
 					logger.info("Load to be released for ({}): [{}]", req.loadType, ClusterUtils.toString(left));
@@ -499,13 +507,14 @@ public class Cluster extends ReceiverAdapter {
 								ClusterUtils.toString(my_buckets));
 					    break;
 					}
-					synchronized (config.releaseLock) {				
-						byte[] busy = releaseLoad(req.loadType, my_buckets, req.load);
-						if (ClusterUtils.count(busy) > 0) {
-							// send to a leader - need recalculate the load
-							sendCommand(Type.REFUSE, msg.getSrc(), req.loadType, busy);
-							return;
-						}
+					//Is not synchronized on (config.releaseLock)
+					//if it is necessary => synchronize inside the releaseLoad.changeLoad(...) callback
+					//It will let to build more flexible synchronization logic
+					byte[] busy = releaseLoad(req.loadType, my_buckets, req.load);
+					if (ClusterUtils.count(busy) > 0) {
+						// send to a leader - need recalculate the load
+						sendCommand(Type.REFUSE, msg.getSrc(), req.loadType, busy);
+						return;
 					}
 					//Here we are sure - there are some free buckets in the cluster
 					newBuckets.put(req.loadType, req.load);
@@ -513,7 +522,7 @@ public class Cluster extends ReceiverAdapter {
 				}
 				break;
 			case ACK:// message for the leader: change is confirmed (only a leader can check the acknowledgement)
-				synchronized (theLoads) {
+				synchronized (clusterLock) {
 					ClusterLoad newLoad = newLoads.get(req.loadType);
 					byte[] new_load = newLoad.getLoad(msg.getSrc());
 					// conversation filter:
@@ -528,13 +537,14 @@ public class Cluster extends ReceiverAdapter {
 				sendCommand(Type.SET_TYPE, null, 0, intToByte(config.loadTypes)); // to All
 				break;
 			case SET_TYPE: 			
-				synchronized (theLoads) {			
+				synchronized (clusterLock) {			
 					int[] types = byteToInt(req.load);
 					for (int type = 0; type < types.length; type++) {
 						initLoadIfAbsent(types[type], msg.getSrc());
 					}
 					if(leader) {
 						if (election && (members.size() < config.nodesToWait)) {
+							logger.warn("Wait for {} nodes to be started", config.nodesToWait);
 							return; // new load => wait for quorum
 						}
 						Set<Integer> typeSet = new HashSet<>();
@@ -566,7 +576,7 @@ public class Cluster extends ReceiverAdapter {
 	 * @param loadType 
 	 * @param members2 
 	 * @param theLoad 
-	 * @protectedBy theLoads
+	 * @protectedBy clusterLock
 	 * 
 	 * @param old_load - current load
 	 * @param newLoad - newly calculated load
@@ -597,7 +607,7 @@ public class Cluster extends ReceiverAdapter {
 	private void takeLoad(int loadType, byte[] oldLoad, byte[] newLoad) {
 		stat.taken++;
 		if(config.takeLoad != null) {
-			config.takeLoad.changeLoad(oldLoad, newLoad);
+			config.takeLoad.changeLoad(loadType, oldLoad, newLoad);
 		}
 		logger.info("Load is taken for ({}): [{}]", loadType, ClusterUtils.toString(newLoad));
 	}
@@ -623,7 +633,7 @@ public class Cluster extends ReceiverAdapter {
 		}
 		byte[] busy = null;
 		try {
-			busy = config.releaseLoad.changeLoad(oldLoad, newLoad);
+			busy = config.releaseLoad.changeLoad(loadType, oldLoad, newLoad);
 			logger.info("Load is released for ({}): [{}]", loadType, ClusterUtils.toString(newLoad));
 		} catch (Exception e) {
 			logger.error("Fail to release buckets", e);
@@ -673,7 +683,7 @@ public class Cluster extends ReceiverAdapter {
 	@Override
 	public String toString() {
 		StringBuilder sb = new StringBuilder();
-		sb.append("Members:\t\t\t").append(members).append('\n');
+		sb.append("Members:\t\t").append(members).append('\n');
 		sb.append("I am:\t\t\t").append(my_addr);
 		if(my_addr instanceof IpAddress) {
 			sb.append("\t\t\t").append(((IpAddress)my_addr).toString());
@@ -902,12 +912,12 @@ public class Cluster extends ReceiverAdapter {
 
     
     public ClusterHealth checkClusterHealth(Integer loadType, long timeout) {
-    	synchronized (theLoads) {
+    	synchronized (clusterLock) {
 	    	ClusterHealth info = new ClusterHealth(loadType);
 	    	List<String> unreachableNodes = new ArrayList<String>();
 	    	
 	    	if(members.size() != config.totalNodes) {
-	    		info.message = "Expected nodes: " + config.totalNodes + "Started: " + members.size(); 
+	    		info.message = "Expected nodes: " + config.totalNodes + " Started: " + members.size(); 
 	    	}
 	    	
 	    	//Check buckets distribution
@@ -1005,6 +1015,21 @@ public class Cluster extends ReceiverAdapter {
 
 	public Builder getConfig() {
 		return config;
+	}
+	
+	public boolean isLeader() {
+		return leader;
+	}
+
+	/**
+	 * Lock to suspend balancer
+	 */
+	public Object getClusterLock() {
+		return clusterLock;
+	}
+
+	public long getMembersNumber() {
+		return members.size();
 	}
 
 }

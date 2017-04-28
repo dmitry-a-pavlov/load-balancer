@@ -64,4 +64,8 @@ public class ApplicationController {
 
     }
 
+    public Result getStatistics() {
+    	return Results.json().render(cluster.getStatistics());
+    }
+
 }

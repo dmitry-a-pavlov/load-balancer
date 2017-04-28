@@ -1,5 +1,8 @@
 package group;
 
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Objects;
 
 /**
@@ -257,5 +260,30 @@ public class ClusterUtils {
         	   ((code[index + 3] & 0xff) << 0);
     }
 
+    //==================================================================
+    // Date format
+    //==================================================================
+
+    public static final String ISO_NO_MILI_NO_ZONE = "yyyy-MM-dd'T'HH:mm:ss";
+    public static final String ISO_NO_MILI = "yyyy-MM-dd'T'HH:mm:ssZZ";
+    public static final String ISO = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";  
+
+    protected static final SimpleDateFormat SDF = new SimpleDateFormat(ISO);
+
+    public static Date getFormattedDate(String isoDateString) {
+      try {
+        return SDF.parse(isoDateString);
+      } catch (ParseException e) {
+        throw new ClusterException("Wrong date format: " + isoDateString);
+      }
+    }
+
+    public static String formatDate(Date date) {
+      return SDF.format(date);
+    }
+    
+    public static String formatDate(long millis) {
+        return SDF.format(new Date(millis));
+    }
 
 }

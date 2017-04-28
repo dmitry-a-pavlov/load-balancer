@@ -2,6 +2,7 @@ package system;
 
 import group.Cluster;
 import group.ClusterHealth;
+import group.Statistics;
 import ninja.lifecycle.Dispose;
 import ninja.lifecycle.Start;
 import ninja.utils.NinjaProperties;
@@ -58,6 +59,10 @@ public class SysCluster {
 
 	public ClusterHealth checkClusterHealth(Integer type) {
 		return cluster.checkClusterHealth(type, 5000);
+	}
+	
+	public Statistics getStatistics() {
+		return cluster.getStatistics();
 	}
 
 }
