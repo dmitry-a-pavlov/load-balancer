@@ -161,23 +161,28 @@ public class Cluster extends ReceiverAdapter {
 		serviceSheduler.shutdown();
 	}
 
+	@Override
+	public void getState(OutputStream output) throws Exception {
+		synchronized (clusterLock) {
+			StringBuilder clusterLoad = getClusterState();
+			Util.objectToStream(clusterLoad.toString(), new DataOutputStream(output));
+		}
+	}
+
 	/**
 	 * format: loadType1#adr1=1,2;adr2=3,5;...;\n
 	 * 		   loadType2#adr1=5,6;adr2=3,5;...;\n
 	 * 		   ....	
 	 * 		   loadTypeN#adr1=5,6;adr2=3,5;...;\n
 	 */
-	@Override
-	public void getState(OutputStream output) throws Exception {
-		synchronized (clusterLock) {
-			StringBuilder clusterLoad = new StringBuilder(); 
-			for(int loadType: theLoads.keySet()) {
-				ClusterLoad theLoad = theLoads.get(loadType);
-				String load = theLoad.getState();
-				clusterLoad.append(loadType).append('#').append(load).append('\n');
-			}
-			Util.objectToStream(clusterLoad.toString(), new DataOutputStream(output));
+	private StringBuilder getClusterState() {
+		StringBuilder clusterLoad = new StringBuilder(); 
+		for(int loadType: theLoads.keySet()) {
+			ClusterLoad theLoad = theLoads.get(loadType);
+			String load = theLoad.getState();
+			clusterLoad.append(loadType).append('#').append(load).append('\n');
 		}
+		return clusterLoad;
 	}
 
 	/**
@@ -1030,6 +1035,16 @@ public class Cluster extends ReceiverAdapter {
 
 	public long getMembersNumber() {
 		return members.size();
+	}
+
+	/**
+	 * @return the cluster state as a string
+	 * @see getClusterState
+	 */
+	public String getState() {
+		synchronized (clusterLock) {
+			return getClusterState().toString();
+		}
 	}
 
 }
