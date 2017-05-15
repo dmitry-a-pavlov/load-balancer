@@ -3,6 +3,8 @@ package group;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -284,6 +286,49 @@ public class ClusterUtils {
     
     public static String formatDate(long millis) {
         return SDF.format(new Date(millis));
+    }
+    
+    /**
+     * @param nodeLoad - 1,3,...  - comma separated list of buckets
+     * @param totalBaketNum - number of buckets for the given load type
+     * @return One|Zero array where non-zero element index is buckets number for the nodeLoad [0,0,...,1,.,1,..]
+     */
+    public static byte[] parse(String nodeLoad, int totalBaketNum) {
+      byte[] result = new byte[totalBaketNum];
+      if (!isEmpty(nodeLoad)) {
+        String[] buckets = nodeLoad.split(",");
+        for (int i = 0; i < buckets.length; i++) {
+          result[Integer.parseInt(buckets[i])] = 1;
+        }
+      }
+      return result;
+    }
+
+    /**
+     * @param load - #adr1=1,2;adr2=3,5;...;
+     * @return {Node_Address, buckets_distribution}, where buckets_distribution ::= (byte[]){0,0,.,1,...} One|Zero bucket array
+     */
+    public static Map<String, byte[]> clusterStateToMap(String load, int totalBaketNum) {
+      Map<String, byte[]> loadMap = new HashMap<>();
+      if(isEmpty(load)) {
+        return loadMap;
+      }
+      
+      String[] avmLoads = load.split(";");
+      for(String avmLoad: avmLoads) {
+        if(avmLoad.trim().length() == 0)
+          continue;
+        
+        String[] str = avmLoad.split("=");
+        if(str.length == 0)
+          continue;
+        
+        String address = str[0].trim(); 
+        String nodeLoad = str.length == 2? str[1].trim(): null; //AVM may have no load at the moment! Don't skip
+        byte[] buckets = ClusterUtils.parse(nodeLoad, totalBaketNum);
+        loadMap.put(address, buckets);
+      }
+      return loadMap;
     }
 
 }

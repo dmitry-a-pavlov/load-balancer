@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 class ClusterLoad implements Cloneable {
 
 	protected static final Logger logger = LoggerFactory.getLogger(ClusterLoad.class);
+	final static String NODE_LOAD_DELIMETER = "=";
 
 	/** 
 	 * map : {Address, "b_1,b_2,...b_n"}
@@ -99,7 +100,7 @@ class ClusterLoad implements Cloneable {
 	public String toString() {
 		StringBuilder sb = new StringBuilder(100);
 		for (String address : load.keySet()) {
-			sb.append(address).append("=");
+			sb.append(address).append(NODE_LOAD_DELIMETER);
 			sb.append(load.get(address));
 			sb.append(";\n");
 		}
@@ -114,7 +115,7 @@ class ClusterLoad implements Cloneable {
 		for (int i = 0; i < loads.length; i++) {
 			if (isEmpty(loads[i]))
 				continue;
-			String avmLoad[] = loads[i].split("=");
+			String avmLoad[] = loads[i].split(NODE_LOAD_DELIMETER);
 			if (avmLoad.length != 2)
 				continue;
 			load.put(avmLoad[0], avmLoad[1]);
@@ -124,7 +125,7 @@ class ClusterLoad implements Cloneable {
 	public String getState() {
 		StringBuilder sb = new StringBuilder(100);
 		for (String address : load.keySet()) {
-			sb.append(address).append("=");
+			sb.append(address).append(NODE_LOAD_DELIMETER);
 			sb.append(load.get(address));
 			sb.append(";");
 		}

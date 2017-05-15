@@ -2,6 +2,7 @@ package group;
 
 import static group.ClusterUtils.byteToInt;
 import static group.ClusterUtils.intToByte;
+import static group.ClusterUtils.isEmpty;
 import static group.LoadRequest.Type.ACK;
 import static group.LoadRequest.Type.COMMIT;
 import static group.LoadRequest.Type.RELEASE;
@@ -21,6 +22,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -32,10 +34,17 @@ import org.jgroups.JChannel;
 import org.jgroups.Message;
 import org.jgroups.ReceiverAdapter;
 import org.jgroups.View;
+import org.jgroups.auth.MD5Token;
 import org.jgroups.blocks.RequestOptions;
 import org.jgroups.blocks.ResponseMode;
 import org.jgroups.blocks.RpcDispatcher;
+import org.jgroups.protocols.ASYM_ENCRYPT;
+import org.jgroups.protocols.AUTH;
+import org.jgroups.protocols.TP;
+import org.jgroups.protocols.pbcast.GMS;
+import org.jgroups.protocols.pbcast.NAKACK2;
 import org.jgroups.stack.IpAddress;
+import org.jgroups.stack.ProtocolStack;
 import org.jgroups.util.RspList;
 import org.jgroups.util.Util;
 import org.slf4j.Logger;
@@ -96,10 +105,23 @@ public class Cluster extends ReceiverAdapter {
 	private ConcurrentHashMap<Integer, Long>  calculateLoadLastTime = new ConcurrentHashMap<>(); //in nanoseconds
 	
 	private ScheduledExecutorService serviceSheduler;
-	
+
+	//~call backs --------------------------------------------------
 	public static interface ChangeLoad {
 		byte[] changeLoad(int loadType, byte[] oldLoad, byte[] newLoad);
 	}
+
+	/**
+	 * Helps to retrieve useful information from the node.
+	 * Load balancer behaves as independent cluster, 
+	 * in order to retrieve useful information from your program
+	 * 
+	 * @param T - serializable class represents application data 
+	 * 			  for a node in the cluster 
+	 */
+	public static interface GetNodeInfo {
+		<T> T getNodeInfo();
+	}	
 
 	// ~constructors ------------------------------------------------
 	public static Builder builder() {
@@ -139,20 +161,52 @@ public class Cluster extends ReceiverAdapter {
 		theLoad.initIfAbsent(owner);
 	}
 
+	private JChannel createSecureChannel() throws Exception {
+		JChannel secureChannel = new JChannel();
+		ProtocolStack stack = secureChannel.getProtocolStack();
+		ASYM_ENCRYPT asymEncrypt = new ASYM_ENCRYPT()
+				.encryptEntireMessage(true).signMessages(true);
+		asymEncrypt.init();
+		stack.insertProtocol(asymEncrypt, ProtocolStack.BELOW, NAKACK2.class);
+		if (!isEmpty(config.authPassword)) {
+			AUTH auth = new AUTH().setAuthCoord(true).setAuthToken(
+					new MD5Token(config.authPassword, "SHA"));
+			stack.insertProtocol(auth, ProtocolStack.BELOW, GMS.class);
+		}
+		stack.findProtocol(GMS.class).setValue("join_timeout", 12000);
+		return secureChannel;
+	}
+
 	public void start() {
 		try {
+			long timeout = 10000;
 			serviceSheduler = Executors.newScheduledThreadPool(1);
-			channel = new JChannel();
+			if (config.isSecurityEnabled) {
+				// secure channel requires longer timeout, like in
+				// channel.getState() below
+				channel = createSecureChannel();
+				timeout = 16000;
+			} else {
+				channel = new JChannel();
+			}
 			channel.setReceiver(this);
 			disp = new RpcDispatcher(channel, this, this, this);
-			
+			setPort();
 			channel.connect(config.clusterName);
 			my_addr = channel.getAddress();
-			channel.getState(null, 10000);
+			channel.getState(null, timeout);
 			stat.startClusterTime = System.currentTimeMillis();
 		} catch (Exception e) {
 			stop();
 			throw new ClusterException("Cannot get cluster state");
+		}
+	}
+	
+	private void setPort() {
+		if (channel != null) {
+			ProtocolStack protocolStack = channel.getProtocolStack();
+			TP transport = protocolStack.getTransport();
+			transport.setBindPort(config.port);
 		}
 	}
 
@@ -772,17 +826,34 @@ public class Cluster extends ReceiverAdapter {
     	/** recalculation timeout in milliseconds */
     	int recalLoadTimeout = 5000; //milliseconds;
     	
-    	/** Callback for release load */
+    	/** Callback to release load */
     	ChangeLoad releaseLoad; 
     	
-    	/**Callback for take load*/
+    	/**Callback to take load*/
     	ChangeLoad takeLoad;
+    	
+    	/**Callback to return node information*/
+        GetNodeInfo getInfo;
     	
     	/** this lock should synchronize resources before to be released */
     	Object releaseLock = new Object();
     	
     	/** Name of the cluster */
     	String clusterName;
+    	
+        /** Port to be used by jGroup UDP */
+        int port = 7600;
+
+        /** Flag for if Security is enabled or not */
+        boolean isSecurityEnabled = false;
+
+        /** Password for authentication */
+        String authPassword;
+        
+		public Builder port(int num) {
+			port = num;
+			return this;
+		}
 
     	public Builder releaseLock(Object lock) {
     		releaseLock = lock;
@@ -794,11 +865,15 @@ public class Cluster extends ReceiverAdapter {
     		return this;
     	}
     	
+		public Builder getInfo(GetNodeInfo callback) {
+			getInfo = callback;
+			return this;
+		}
+    	
     	public Builder takeLoad(ChangeLoad callback) {
     		takeLoad = callback;
     		return this;
     	}
-
 
     	public Builder totalBuckets(int num) {
     		totalBuckets = num;
@@ -841,6 +916,16 @@ public class Cluster extends ReceiverAdapter {
             clusterName = name;
             return this;
         }
+        
+		public Builder enableSecurity(boolean isSecEnabled) {
+			isSecurityEnabled = isSecEnabled;
+			return this;
+		}
+
+		public Builder authPassword(String passwd) {
+			authPassword = passwd;
+			return this;
+		}
     	
     	public Cluster build() {
     		if(ClusterUtils.isEmpty(clusterName)) {
@@ -852,12 +937,28 @@ public class Cluster extends ReceiverAdapter {
     }
     
     //~ Cluster state validation --------------------------------------------------------------
-    //  the methods are remotely called  
+	/**
+	 * @return the cluster state as a string
+	 * @see getClusterState
+	 */
+	public String getState() {
+		synchronized (clusterLock) {
+			return getClusterState().toString();
+		}
+	}
+    
+    
+    /**
+     * The method is remotely called  
+     * @param loadType - load type
+     * @return cluster state as a string: #adr1=1,2;adr2=3,5;...;
+     * @protectedBy clusterLock  - do not put the synch block in the method it will break health check. 
+     */
     public String getState(Integer loadType) {
     	ClusterLoad theLoad = theLoads.get(loadType);
     	StringBuilder sb = new StringBuilder(100);
     	for(Address address: members) {
-			sb.append(address).append("=");
+			sb.append(address).append(ClusterLoad.NODE_LOAD_DELIMETER);
 			sb.append(ClusterUtils.toString(theLoad.getLoad(address)));
 			sb.append(";");
     	}
@@ -883,7 +984,7 @@ public class Cluster extends ReceiverAdapter {
 			list = disp.<Statistics>callRemoteMethods(members, "getStatistics", null, null, 
 													  new RequestOptions(ResponseMode.GET_ALL, timeout));
 		} catch (Exception e) {
-			logger.error("Query to cluster statistics fail", e);
+			logger.error("Query to cluster statistics failed", e);
 			return null;
 		}
     	Statistics res = new Statistics(config, getLoadTypes().toString());
@@ -908,7 +1009,7 @@ public class Cluster extends ReceiverAdapter {
     							new RequestOptions(ResponseMode.GET_FIRST, timeout));
 	    		res.add(stat);
 			} catch (Exception e) {
-				logger.error("Query to cluster statistics fail {}, {}", adr, e.getMessage());
+				logger.error("Query to node statistics failed {}, {}", adr, e.getMessage());
 				return null;
 			}
     	}
@@ -1037,14 +1138,45 @@ public class Cluster extends ReceiverAdapter {
 		return members.size();
 	}
 
+	
+	// -------------------------------------------------------
 	/**
-	 * @return the cluster state as a string
-	 * @see getClusterState
+	 * Externally called from other nodes
 	 */
-	public String getState() {
-		synchronized (clusterLock) {
-			return getClusterState().toString();
+	public <T> T getNodeInfo() {
+		if (config.getInfo != null) {
+			return config.getInfo.<T> getNodeInfo();
 		}
+		return null;
+	}
+
+	/**
+	 * This method provides extra information taken from all nodes in the
+	 * cluster.
+	 * 
+	 * @param address
+	 *            - node address as a text
+	 * @return extra information for the given node address
+	 */
+	public <T> T getNodeInfo(String address) {
+		Objects.requireNonNull(address);
+
+		T info = null;
+		for (Address adr : members) {
+			if (address.equals(adr.toString())) {
+				try {
+					info = disp.<T> callRemoteMethod(adr, "getNodeInfo", null,
+							null, new RequestOptions(ResponseMode.GET_FIRST,
+									1000));
+				} catch (Exception e) {
+					logger.error("Query to node information failed {}, {}",
+							adr, e.getMessage());
+					return null;
+				}
+				break;
+			}
+		}
+		return info;
 	}
 
 }
